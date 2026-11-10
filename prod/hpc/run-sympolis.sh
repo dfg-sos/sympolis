@@ -1,156 +1,173 @@
 #!/bin/bash
-# Installation
-REINSTALL=false
 WORKFLOW_DIR="$HOME/sympolis-workflow"
+REPOSITORY="https://github.com/dfg-sos/sympolis.git"
+SYMPOLIS_IMAGE="ghcr.io/dfg-sos/sympolis"
+FORMAT_ONTOLOGY="https://dfg-sos.github.io/ontologies/eo-formats"
+SLURM_TIME="23:59:59"
+TMPDIR="${TMPDIR:-/tmp}"
+
 usage() {
-    echo "Usage: $0 [--preset <PRESET_FILE>] <INPUT_FILE>"
-    echo "       $0 --job <JOB_FILE>"
-    echo "       $0 --update"
-    echo "  <INPUT_FILE>  Vector file (.gpkg) or shapefile (.shp) holding the settlement polygons"
-    echo "  --preset      CWL job file holding the parameters of the run, including the partition"
-    echo "                depth. Its input is replaced by <INPUT_FILE>. Defaults to"
-    echo "                $WORKFLOW_DIR/jobs/default.yml, see $WORKFLOW_DIR/jobs for the available presets"
-    echo "  --job         Complete CWL job file, run as is. It sets the input itself, so neither"
-    echo "                <INPUT_FILE> nor --preset may be given"
-    echo "  --update      Reinstall the workflow and exit"
+    cat <<EOF
+Usage: $(basename "$0") [--profile] [--image-tag <TAG>] [--preset <PRESET_FILE>] <INPUT_FILE>
+       $(basename "$0") [--profile] [--image-tag <TAG>] --job <JOB_FILE>
+       $(basename "$0") --update
+  <INPUT_FILE>  Vector file (.gpkg) or shapefile (.shp) holding the settlement polygons
+  --preset      Job file holding the parameters of the run, its input being replaced by <INPUT_FILE>.
+                Defaults to $WORKFLOW_DIR/jobs/default.yml
+  --job         Complete job file, run as is. Cannot be combined with <INPUT_FILE> or --preset
+  --profile     Keep the logs of every job in <OUTPUT_DIR>/logs. The stdout log of each job ends
+                with a summary of its parameters, inputs, outputs and runtime
+  --image-tag   Tag of the sympolis image run by the workflow steps, e.g. a release or 'edge' for
+                the latest build of main. Defaults to latest
+  --update      Reinstall the workflow and exit
+EOF
 }
 
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --update)
-            REINSTALL=true
-            shift
-            ;;
-        *)
-            break
-            ;;
-    esac
-done
+die() {
+    echo "Error: $1" >&2
+    echo "Run $(basename "$0") --help for usage" >&2
+    exit 1
+}
 
-if [ ! -d "$WORKFLOW_DIR" ] || [ "$REINSTALL" = true ]; then
-    rm -rf "$WORKFLOW_DIR"
+require_value() {
+    [ -n "$2" ] || die "$1 requires a value"
+}
+
+install() {
+    local source="$TMPDIR/sympolis"
+    rm -rf "$WORKFLOW_DIR" "$source"
+    git clone "$REPOSITORY" "$source" || exit 1
     mkdir -p "$WORKFLOW_DIR"
-    cd $TMPDIR
-    rm -rf sympolis
-    git clone https://github.com/dfg-sos/sympolis.git
-    cp sympolis/Sympolis.cwl $WORKFLOW_DIR/Sympolis.cwl
-    cp -r sympolis/cwl $WORKFLOW_DIR/cwl
-    cp -r sympolis/jobs $WORKFLOW_DIR/jobs
-    cp -r sympolis/data/input $WORKFLOW_DIR/input
-    cd $WORKFLOW_DIR
-    module load python 
-    python -m venv venv
-    source venv/bin/activate
-    pip install toil[cwl]
-    pip install nodeenv
+    cp -r "$source/Sympolis.cwl" "$source/cwl" "$source/jobs" "$WORKFLOW_DIR"
+    cp -r "$source/data/input" "$WORKFLOW_DIR/input"
+    module load python
+    python -m venv "$WORKFLOW_DIR/venv"
+    source "$WORKFLOW_DIR/venv/bin/activate"
+    pip install "toil[cwl]" nodeenv
     nodeenv -p
-    echo "Installation complete. You can now run the workflow using the following command:"
+    echo "Installation complete"
     usage
+}
+
+parse_args() {
+    UPDATE=false
+    PROFILE=false
+    IMAGE_TAG="latest"
+    INPUT_FILE=""
+    PRESET_FILE=""
+    JOB_FILE=""
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --update)    UPDATE=true; shift ;;
+            --profile)   PROFILE=true; shift ;;
+            --image-tag) require_value "$@"; IMAGE_TAG="$2"; shift 2 ;;
+            --preset)    require_value "$@"; PRESET_FILE="$2"; shift 2 ;;
+            --job)       require_value "$@"; JOB_FILE="$2"; shift 2 ;;
+            -h|--help)   usage; exit 0 ;;
+            -*)          die "Unknown option $1" ;;
+            *)
+                [ -z "$INPUT_FILE" ] || die "More than one input file given"
+                INPUT_FILE="$1"
+                shift
+                ;;
+        esac
+    done
+}
+
+# Resolves the given files to absolute paths and names the experiment after them
+resolve_experiment() {
+    if [ -n "$JOB_FILE" ]; then
+        [ -z "$INPUT_FILE$PRESET_FILE" ] || die "--job cannot be combined with an input file or --preset"
+        [ -f "$JOB_FILE" ] || die "Job file '$JOB_FILE' does not exist"
+        JOB_FILE="$(realpath "$JOB_FILE")"
+        EXPERIMENT_NAME="$(basename "$JOB_FILE" .yml)"
+    else
+        PRESET_FILE="${PRESET_FILE:-$WORKFLOW_DIR/jobs/default.yml}"
+        [ -n "$INPUT_FILE" ] || die "Missing input file"
+        [ -f "$INPUT_FILE" ] || die "Input file '$INPUT_FILE' does not exist"
+        [ -f "$PRESET_FILE" ] || die "Preset file '$PRESET_FILE' does not exist"
+        INPUT_FILE="$(realpath "$INPUT_FILE")"
+        PRESET_FILE="$(realpath "$PRESET_FILE")"
+        EXPERIMENT_NAME="$(basename "${INPUT_FILE%.*}")_$(basename "$PRESET_FILE" .yml)"
+    fi
+    OUTPUT_DIR="$WORKFLOW_DIR/output/$EXPERIMENT_NAME"
+}
+
+# A job file cannot be combined with command line arguments, so the input file and the parameters
+# of the preset are merged into one, dropping the input the preset ships with
+write_job_file() {
+    local key="vectorFile" format="GeoPackage"
+    if [[ "$INPUT_FILE" == *.shp ]]; then
+        key="shapefile"
+        format="Shapefile"
+    fi
+    {
+        echo "# Generated by run-sympolis.sh from $PRESET_FILE"
+        echo "$key:"
+        echo "  class: File"
+        echo "  path: $INPUT_FILE"
+        echo "  format: \"$FORMAT_ONTOLOGY#$format\""
+        awk '/^[^[:space:]#]/ { skip = ($0 ~ /^(vectorFile|shapefile):/) } !skip' "$PRESET_FILE"
+    } > "$1"
+}
+
+# dockerPull does not accept expressions, so the image of every tool running the sympolis image is
+# replaced by a cwltool override, keyed by the URI of the tool
+write_overrides() {
+    {
+        echo "cwltool:overrides:"
+        for tool in $(grep -l "dockerPull: *$SYMPOLIS_IMAGE:" "$WORKFLOW_DIR"/cwl/*.cwl); do
+            echo "  file://$tool:"
+            echo "    requirements:"
+            echo "      DockerRequirement:"
+            echo "        dockerPull: $SYMPOLIS_IMAGE:$IMAGE_TAG"
+        done
+    } > "$1"
+}
+
+run_workflow() {
+    local job_store="$TMPDIR/toil"
+    local options=(--singularity --batchSystem slurm --jobStore "$job_store" --doubleMem True --retryCount 2 --slurmTime "$SLURM_TIME")
+    if $PROFILE; then
+        # toil only keeps the logs of failed jobs by default
+        rm -rf "$LOG_DIR"
+        options+=(--writeLogsFromAllJobs true)
+    fi
+    options+=(--writeLogs "$LOG_DIR")
+    if [ "$IMAGE_TAG" != "latest" ]; then
+        write_overrides "$OUTPUT_DIR/overrides.yml"
+        # toil prepulls the images named by the cwl files, ignoring the overrides
+        options+=(--overrides "$OUTPUT_DIR/overrides.yml" --no-prepull)
+        echo "Running the workflow steps with $SYMPOLIS_IMAGE:$IMAGE_TAG"
+    fi
+    rm -rf "$job_store"
+    toil-cwl-runner "${options[@]}" "$WORKFLOW_DIR/Sympolis.cwl" "$JOB_FILE"
+}
+
+parse_args "$@"
+if $UPDATE || [ ! -d "$WORKFLOW_DIR" ]; then
+    install
     exit 0
 fi
-# Load modules
 module load apptainer
 module load gcc # required by nodejs
 module load squashfs
-source $WORKFLOW_DIR/venv/bin/activate
-# Parse command line arguments
-INPUT_FILE=""
-PRESET_FILE=""
-JOB_FILE=""
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --preset)
-            PRESET_FILE="$2"
-            shift 2
-            ;;
-        --job)
-            JOB_FILE="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        -*)
-            echo "Error: Unknown option $1"
-            usage
-            exit 1
-            ;;
-        *)
-            if [ -n "$INPUT_FILE" ]; then
-                echo "Error: More than one input file given"
-                usage
-                exit 1
-            fi
-            INPUT_FILE="$1"
-            shift
-            ;;
-    esac
-done
-# Validate input parameters
-WORKFLOW_FILE="$WORKFLOW_DIR/Sympolis.cwl"
-if [ -n "$JOB_FILE" ]; then
-    if [ -n "$INPUT_FILE" ] || [ -n "$PRESET_FILE" ]; then
-        echo "Error: --job cannot be combined with an input file or --preset."
-        usage
-        exit 1
-    fi
-    if [ ! -f "$JOB_FILE" ]; then
-        echo "Error: Job file '$JOB_FILE' does not exist."
-        exit 1
-    fi
-    JOB_FILE="$(cd "$(dirname "$JOB_FILE")" && pwd)/$(basename "$JOB_FILE")"
-    EXPERIMENT_NAME="$(basename "$JOB_FILE" .yml)"
-else
-    PRESET_FILE="${PRESET_FILE:-$WORKFLOW_DIR/jobs/default.yml}"
-    if [ -z "$INPUT_FILE" ]; then
-        echo "Error: Missing input file."
-        usage
-        exit 1
-    fi
-    if [ ! -f "$INPUT_FILE" ]; then
-        echo "Error: Input file '$INPUT_FILE' does not exist."
-        exit 1
-    fi
-    if [ ! -f "$PRESET_FILE" ]; then
-        echo "Error: Preset file '$PRESET_FILE' does not exist."
-        exit 1
-    fi
-    # Convert to absolute paths
-    INPUT_FILE="$(cd "$(dirname "$INPUT_FILE")" && pwd)/$(basename "$INPUT_FILE")"
-    PRESET_FILE="$(cd "$(dirname "$PRESET_FILE")" && pwd)/$(basename "$PRESET_FILE")"
-    EXPERIMENT_NAME="$(basename "${INPUT_FILE%.*}")_$(basename "$PRESET_FILE" .yml)"
-fi
-# Setup JobStore directory
-JOB_STORE="$TMPDIR/toil"
-mkdir -p "$JOB_STORE"
-rm -rf "$JOB_STORE"
-# Create output directory based on input file name and preset file name
-OUTPUT_DIR="$WORKFLOW_DIR/output/$EXPERIMENT_NAME"
+source "$WORKFLOW_DIR/venv/bin/activate"
+
+resolve_experiment
 mkdir -p "$OUTPUT_DIR"
-cd "$OUTPUT_DIR"
-# A cwl job file describes a run completely and cannot be combined with command line arguments, so
-# the parameters of the preset and the input of this run are merged into a job file first. Every
-# parameter but the input file is taken from the preset, the partition depth among them.
-# A job file passed with --job is run as is, its relative paths being resolved against its location.
+cd "$OUTPUT_DIR" || exit 1
 if [ -z "$JOB_FILE" ]; then
-    if [[ "$INPUT_FILE" == *.shp ]]; then INPUT_KEY="shapefile"; INPUT_FORMAT="Shapefile"; else INPUT_KEY="vectorFile"; INPUT_FORMAT="GeoPackage"; fi
     JOB_FILE="$OUTPUT_DIR/job.yml"
-    {
-        echo "# Generated by run-sympolis.sh from $PRESET_FILE"
-        echo "$INPUT_KEY:"
-        echo "  class: File"
-        echo "  path: $INPUT_FILE"
-        echo "  format: \"https://dfg-sos.github.io/ontologies/eo-formats#$INPUT_FORMAT\""
-        # Take the parameters of the preset, dropping the input it ships with
-        awk '/^[^[:space:]#]/ { skip = ($0 ~ /^(vectorFile|shapefile):/) } !skip' "$PRESET_FILE"
-    } > "$JOB_FILE"
+    write_job_file "$JOB_FILE"
 fi
+LOG_DIR="$WORKFLOW_DIR/log"
+$PROFILE && LOG_DIR="$OUTPUT_DIR/logs"
+
 echo "Running workflow with the following parameters:"
 cat "$JOB_FILE"
-# Run TOIL CWL workflow
-SLURM_TIME=23:59:59
-toil-cwl-runner --singularity --batchSystem slurm --jobStore $JOB_STORE --doubleMem True --retryCount 2 --slurmTime $SLURM_TIME --writeLogs $WORKFLOW_DIR/log $WORKFLOW_FILE "$JOB_FILE"
-if [ $? -eq 0 ]; then
-    echo "Workflow execution complete. Output files are located in $OUTPUT_DIR"
-fi
+run_workflow
+STATUS=$?
+$PROFILE && echo "Job logs are located in $LOG_DIR"
+[ $STATUS -eq 0 ] && echo "Workflow execution complete. Output files are located in $OUTPUT_DIR"
+exit $STATUS

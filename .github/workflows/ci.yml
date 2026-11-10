@@ -32,65 +32,60 @@ concurrency:
   # Never cancel a run that may be publishing.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 env:
   # Must match the dockerPull of the cwl/*.cwl tools, so the CWL run uses the freshly built image.
   IMAGE: ghcr.io/dfg-sos/sympolis
   CWLTOOL_VERSION: 3.1.20260108082145
 
 jobs:
-  build-test-publish:
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      tags: ${{ steps.tags.outputs.tags }}
+      publish: ${{ steps.tags.outputs.publish }}
+      release: ${{ steps.tags.outputs.release }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read version from CMakeLists.txt
-        id: version
-        run: |
-          VERSION=$(grep -oP 'project\s*\([^)]*VERSION\s+\K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # Release tags v<version> publish <version> and latest, main publishes edge, other refs publish nothing.
-      - name: Determine image tags to publish
+      # Release tags v<version> publish <version> and latest and create a release, main publishes edge,
+      # other refs publish nothing. Pushes publish, manual runs only if requested.
+      - name: Determine what to publish
         id: tags
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
         run: |
+          RELEASE=false
           case "$GITHUB_REF" in
             refs/tags/v*)
-              if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
-                echo "::error::Tag $GITHUB_REF_NAME does not match version $VERSION in CMakeLists.txt"
-                exit 1
-              fi
-              TAGS="$IMAGE:$VERSION $IMAGE:latest" ;;
-            refs/heads/main)
-              TAGS="$IMAGE:edge" ;;
-            *)
-              TAGS="" ;;
+              VERSION="${GITHUB_REF_NAME#v}"
+              [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Tag $GITHUB_REF_NAME is not of the form v<major>.<minor>.<patch>"; exit 1; }
+              TAGS="$IMAGE:$VERSION $IMAGE:latest"
+              RELEASE=true ;;
+            refs/heads/main) TAGS="$IMAGE:edge" ;;
+            *)               TAGS="" ;;
           esac
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
-          # The CWL tools reference latest, so the image is always built as latest as well.
-          echo "build-tags=$(echo "$IMAGE:latest $TAGS" | tr ' ' '\n' | sort -u | paste -sd,)" >> "$GITHUB_OUTPUT"
-          if [ -n "$TAGS" ] && { [ "$GITHUB_EVENT_NAME" = push ] || [ "${{ inputs.publish }}" = true ]; }; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+          PUBLISH=false
+          if [ -n "$TAGS" ] && { [ "$GITHUB_EVENT_NAME" = push ] || [ "$PUBLISH_REQUESTED" = true ]; }; then
+            PUBLISH=true
           fi
+          [ "$PUBLISH" = true ] || RELEASE=false
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
-      # The build stage of the Dockerfile compiles and installs all binaries.
-      # The image is loaded into the local daemon as latest, so the CWL run below uses it
-      # instead of pulling the published image from the registry. latest is only pushed for release tags.
+      # The image is loaded into the local daemon as latest, which the CWL tools reference, so the CWL
+      # run below uses it instead of pulling the published image. It is tagged for publishing later on.
       - name: Build binaries and Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
-          push: false
-          tags: ${{ steps.tags.outputs.build-tags }}
+          tags: ${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -131,18 +126,68 @@ jobs:
           path: ci-output/
           if-no-files-found: ignore
 
-      - name: Log in to GitHub Container Registry
+      # The publish job pushes the exact image tested above instead of building it again.
+      - name: Save tested image
         if: steps.tags.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        run: docker save "$IMAGE:latest" -o "$RUNNER_TEMP/image.tar"
+
+      - name: Upload tested image
+        if: steps.tags.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: ${{ runner.temp }}/image.tar
+          retention-days: 1
+
+  publish:
+    needs: test
+    if: needs.test.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+          path: ${{ runner.temp }}
+
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Pushes the exact image that passed the CWL run above.
       - name: Publish Docker image
-        if: steps.tags.outputs.publish == 'true'
+        env:
+          TAGS: ${{ needs.test.outputs.tags }}
         run: |
-          for tag in ${{ steps.tags.outputs.tags }}; do
+          docker load -i "$RUNNER_TEMP/image.tar"
+          for tag in $TAGS; do
+            docker tag "$IMAGE:latest" "$tag"
             docker push "$tag"
           done
+
+  # Release tags publish the runner script as GitHub release. The released script installs the
+  # workflow of its tag and runs the image of its version.
+  release:
+    needs: [test, publish]
+    if: needs.test.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version of runner script
+        run: |
+          sed 's/^VERSION="main"$/VERSION="'"$TAG"'"/' prod/hpc/run-sympolis.sh > run-sympolis.sh
+          grep -qx "VERSION=\"$TAG\"" run-sympolis.sh || { echo "::error::Could not set VERSION in run-sympolis.sh"; exit 1; }
+
+      - name: Publish release
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          gh release upload "$TAG" run-sympolis.sh --clobber

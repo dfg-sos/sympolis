@@ -155,34 +155,17 @@ completely, so command line arguments cannot be added on top of it. Copy one of 
 adapt its `vectorFile` (or `shapefile`) entry to run a parameter set on your own data.
 
 # HPC Deployment
-Use the [Sympolis Shellscript](prod/hpc/run-sympolis.sh) to install and run the workflow on a HPC system. You can also do the following steps manually:
-### 1. Upload Files
-- Upload `Sympolis.cwl`, the `cwl` directory holding the tools it references and the `jobs` directory holding the parameter presets, keeping the directory structure of the repository
-- Upload input files or pull from STAC
-### 2. Install Toil
-- Create python venv
+The [runner script](prod/hpc/run-sympolis.sh) installs and runs the workflow on a HPC system with
+Slurm and Apptainer, using `toil-cwl-runner`. Download it from the latest release:
 ```
-module load python
-python -m venv ~/sympolis-workflow/venv
+curl -fsSLO https://github.com/dfg-sos/sympolis/releases/latest/download/run-sympolis.sh
+chmod +x run-sympolis.sh
 ```
-- Source venv
-``` 
-source ~/sympolis-workflow/venv/bin/activate
-```
-- Install via pip
-```
-pip install toil[cwl]
-```
-### 3. Execute Workflow
-Execute via the `toil-cwl-runner` directly (current directory will be output directory), passing a
-job file which sets the input and the parameters of the run
-```
-module load apptainer
-source ~/sympolis-workflow/venv/bin/activate
-toil-cwl-runner --singularity --batchSystem slurm ~/sympolis-workflow/Sympolis.cwl <Job.yml>
-```
-The [shellscript](prod/hpc/run-sympolis.sh) does this for you. Its first call installs the workflow
-into `~/sympolis-workflow`, `--update` reinstalls it from the `main` branch of this repository.
+A released script installs the workflow of its release and runs the image of the same version.
+The script in this repository installs the `main` branch and runs the `latest` image instead.
+
+Its first call installs the workflow and Toil into `~/sympolis-workflow`, `--update` reinstalls them.
+To upgrade to a newer release, download its script and run it with `--update`.
 ```
 ./run-sympolis.sh --update
 ```
@@ -198,12 +181,13 @@ relative paths are resolved against the location of the job file.
 ```
 The outputs are written to `~/sympolis-workflow/output/<Experiment>`, named after the input file
 and the preset (`<File>_<Preset>`), or after the job file when using `--job`. The script exits with
-the exit status of `toil-cwl-runner`.
+the exit status of `toil-cwl-runner`. To run the workflow without the script, see its
+`run_workflow` function for the options passed to `toil-cwl-runner`.
 
 | Option | Effect |
 |---|---|
 | `--profile` | Keeps the logs of every job in `<Experiment>/logs`. The stdout log of each job (`<Step>.stdout_<n>.log`) ends with a `Summary:` line in JSON, holding its parameters, inputs and outputs with their sizes, metrics such as feature counts, and its runtime in seconds |
-| `--image-tag <Tag>` | Runs the workflow steps with `ghcr.io/dfg-sos/sympolis:<Tag>` instead of `latest`, e.g. a release or `edge` for the latest build of `main`. The image is replaced by a cwltool override written to `<Experiment>/overrides.yml` |
+| `--image-tag <Tag>` | Runs the workflow steps with `ghcr.io/dfg-sos/sympolis:<Tag>` instead of the image of the script's version, e.g. another release or `edge` for the latest build of `main`. The image is replaced by a cwltool override written to `<Experiment>/overrides.yml` |
 
 # Development
 ### Binaries (C++)
@@ -240,13 +224,14 @@ The [CI workflow](.github/workflows/ci.yml) runs on release tags `v*`, on manual
 the binaries, the image or the workflow tested by it (`src`, `lib`, `CMakeLists.txt`, `Dockerfile`,
 `.dockerignore`, `Sympolis.cwl`, `cwl`, `jobs/default.yml` and the pipeline itself). Changes to
 the documentation, the other job files or the HPC scripts do not trigger it.
-1. Builds the binaries by building the [Dockerfile](Dockerfile)
-2. Runs every binary with `--help` as a smoke test
-3. Validates [Sympolis.cwl](Sympolis.cwl) and executes it with [jobs/default.yml](jobs/default.yml) using `cwltool`, against the freshly built image. The outputs are uploaded as the `sympolis-output` artifact.
-4. Publishes the tested image to the GitHub Container Registry:
-   - release tags `v<version>` publish the stable `:<version>` and `:latest` tags. The tag must match the version in [CMakeLists.txt](CMakeLists.txt), otherwise the run fails
+It consists of three jobs, each with only the permissions it needs. The release tag is the only
+place holding the version, so releasing means pushing a tag `v<major>.<minor>.<patch>`.
+1. `test` builds the binaries from the [Dockerfile](Dockerfile), runs every binary with `--help` as a smoke test, and validates [Sympolis.cwl](Sympolis.cwl) and executes it with [jobs/default.yml](jobs/default.yml) using `cwltool` against the freshly built image. The outputs are uploaded as the `sympolis-output` artifact.
+2. `publish` pushes the tested image to the GitHub Container Registry:
+   - release tags `v<major>.<minor>.<patch>` publish the stable `:<version>` and `:latest` tags
    - pushes to `main` publish the development tag `:edge`
    - manual runs publish the same tags for the selected `main` branch or release tag if `publish` is checked
    - pull requests and other branches publish nothing
+3. `release` creates the GitHub release of a release tag, attaching the [runner script](prod/hpc/run-sympolis.sh) set to the version of the tag
 
 Publishing authenticates with the workflow's `GITHUB_TOKEN`, so no secrets are needed.

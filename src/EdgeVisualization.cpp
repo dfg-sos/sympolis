@@ -45,7 +45,12 @@ class EdgeVisualization: public Task {
 
 
 public:
-    EdgeVisualization(const std::vector<std::string> & geometryFiles, std::filesystem::path graphFile, const std::string & outputStem):Task("EdgeVisualization"), geometryFiles(geometryFiles), graphFile(std::move(graphFile)), outputStem(outputStem){}
+    EdgeVisualization(const std::vector<std::string> & geometryFiles, std::filesystem::path graphFile, const std::string & outputStem):Task("EdgeVisualization"), geometryFiles(geometryFiles), graphFile(std::move(graphFile)), outputStem(outputStem){
+        for(const auto & geometryFile: this->geometryFiles){
+            addInput(geometryFile);
+        }
+        addInput(this->graphFile);
+    }
 
     void run() {
         using Shapetype = fishnet::geometry::Polygon<double>;
@@ -71,7 +76,12 @@ public:
             }
         }
         auto outputExtension = std::filesystem::path(geometryFiles.front()).extension().string();
-        fishnet::VectorIO::overwrite(outputLayer, fishnet::AbstractVectorFile(outputStem+"_edges"+outputExtension));
+        auto outputPath = std::filesystem::path(outputStem+"_edges"+outputExtension);
+        addMetric("nodes", fishnet::util::size(graph.getNodes()));
+        addMetric("edges", fishnet::util::size(graph.getEdges()));
+        addMetric("outputFeatures", fishnet::util::size(outputLayer.getFeatures()));
+        addOutput(outputPath);
+        fishnet::VectorIO::overwrite(outputLayer, fishnet::AbstractVectorFile(outputPath));
     }
 };
 

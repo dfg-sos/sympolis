@@ -72,14 +72,24 @@ public:
             this->fileRefMap[HashingFileReferenceMapper{}(vectorFile)] = vectorFile.getPath();
             this->distanceFunction = distanceFunctionForSpatialReference(layer.getSpatialReference());
         });
+        addInput(primaryInput.getPath());
+        for(const auto & secondaryInput: secondaryInputs){
+            addInput(secondaryInput.getPath());
+        }
+        addParameter("mode", magic_enum::enum_name(this->parameters.mode));
+        addParameter("distanceThreshold", this->parameters.distanceThreshold);
+        if(this->parameters.maxNeighboursPerNode) addParameter("maxNeighboursPerNode", *this->parameters.maxNeighboursPerNode);
         this->settlements = SettlementShape<S>::read(primaryInput, reader, HashingFileReferenceMapper{});
+        addMetric("primarySettlements", this->settlements.size());
         this->graphBinaryOutputPath = std::to_string(HashingFileReferenceMapper{}(primaryInput).fileId) + "_graph.bin";
+        addOutput(this->graphBinaryOutputPath);
         // Read additional inputs with bounding box filter
         if(this->settlements.empty()){
             std::cerr << "Warning: No settlements read from primary input, returning empty graph" << std::endl;
         }else {
             auto distanceFromBoundingBoxFilter = DistancePredicate(this->distanceFunction, fishnet::geometry::minimalBoundingBox(this->settlements), this->parameters.distanceThreshold);
             auto additionalSettlements = SettlementShape<S>::template read<fishnet::AbstractVectorFile>(secondaryInputs, reader, HashingFileReferenceMapper{}, distanceFromBoundingBoxFilter);
+            addMetric("additionalSettlements", additionalSettlements.size());
             this->settlements.insert(this->settlements.end(), additionalSettlements.begin(), additionalSettlements.end());
         }
     }
@@ -94,6 +104,7 @@ public:
             )
         );
         auto result = this->compute_neighbours();
+        addMetric("edges", result.size());
         graph.addNodes(this->settlements);
         graph.addEdges(result);
     }

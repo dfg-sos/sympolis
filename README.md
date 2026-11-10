@@ -181,9 +181,13 @@ module load apptainer
 source ~/sympolis-workflow/venv/bin/activate
 toil-cwl-runner --singularity --batchSystem slurm ~/sympolis-workflow/Sympolis.cwl <Job.yml>
 ```
-The [shellscript](prod/hpc/run-sympolis.sh) does this for you, taking the input file and a
-preset holding everything else, the partition depth included. Without `--preset`,
-[_default.yml_](jobs/default.yml) is used.
+The [shellscript](prod/hpc/run-sympolis.sh) does this for you. Its first call installs the workflow
+into `~/sympolis-workflow`, `--update` reinstalls it from the `main` branch of this repository.
+```
+./run-sympolis.sh --update
+```
+A run takes the input file and a preset holding everything else, the partition depth included.
+Without `--preset`, [_default.yml_](jobs/default.yml) is used.
 ```
 ./run-sympolis.sh --preset ~/sympolis-workflow/jobs/dbsc200_sweep.yml <File.gpkg>
 ```
@@ -193,7 +197,13 @@ relative paths are resolved against the location of the job file.
 ./run-sympolis.sh --job <Job.yml>
 ```
 The outputs are written to `~/sympolis-workflow/output/<Experiment>`, named after the input file
-and the preset (`<File>_<Preset>`), or after the job file when using `--job`.
+and the preset (`<File>_<Preset>`), or after the job file when using `--job`. The script exits with
+the exit status of `toil-cwl-runner`.
+
+| Option | Effect |
+|---|---|
+| `--profile` | Keeps the logs of every job in `<Experiment>/logs`. The stdout log of each job (`<Step>.stdout_<n>.log`) ends with a `Summary:` line in JSON, holding its parameters, inputs and outputs with their sizes, metrics such as feature counts, and its runtime in seconds |
+| `--image-tag <Tag>` | Runs the workflow steps with `ghcr.io/dfg-sos/sympolis:<Tag>` instead of `latest`, e.g. a release or `edge` for the latest build of `main`. The image is replaced by a cwltool override written to `<Experiment>/overrides.yml` |
 
 # Development
 ### Binaries (C++)
@@ -228,9 +238,9 @@ The image is published by the CI pipeline.
 ### CI/CD
 The [CI workflow](.github/workflows/ci.yml) runs on release tags `v*`, on manual dispatch and on pushes and pull requests to `main` that touch
 the binaries, the image or the workflow tested by it (`src`, `lib`, `CMakeLists.txt`, `Dockerfile`,
-`Sympolis.cwl`, `cwl`, `jobs/default.yml` and the pipeline itself). Changes to
+`.dockerignore`, `Sympolis.cwl`, `cwl`, `jobs/default.yml` and the pipeline itself). Changes to
 the documentation, the other job files or the HPC scripts do not trigger it.
-1. Builds the binaries by building the [Dockerfile](Dockerfile) as `ghcr.io/dfg-sos/sympolis:latest`
+1. Builds the binaries by building the [Dockerfile](Dockerfile)
 2. Runs every binary with `--help` as a smoke test
 3. Validates [Sympolis.cwl](Sympolis.cwl) and executes it with [jobs/default.yml](jobs/default.yml) using `cwltool`, against the freshly built image. The outputs are uploaded as the `sympolis-output` artifact.
 4. Publishes the tested image to the GitHub Container Registry:

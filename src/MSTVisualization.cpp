@@ -102,7 +102,13 @@ class MSTVisualization: public Task {
     }
 
 public:
-    MSTVisualization(const std::vector<std::string> & geometryFiles, std::filesystem::path graphFile, double bufferInMeters, const std::string & outputStem):Task("MSTVisualization"), geometryFiles(geometryFiles), graphFile(std::move(graphFile)), outputStem(outputStem), bufferInMeters(bufferInMeters){}
+    MSTVisualization(const std::vector<std::string> & geometryFiles, std::filesystem::path graphFile, double bufferInMeters, const std::string & outputStem):Task("MSTVisualization"), geometryFiles(geometryFiles), graphFile(std::move(graphFile)), outputStem(outputStem), bufferInMeters(bufferInMeters){
+        for(const auto & geometryFile: this->geometryFiles){
+            addInput(geometryFile);
+        }
+        addInput(this->graphFile);
+        addParameter("buffer", bufferInMeters);
+    }
 
     void run() {
         using Shapetype = fishnet::geometry::Polygon<double>;
@@ -119,6 +125,8 @@ public:
                 SettlementShapeDeserializer<Shapetype>{std::move(nodes)}
             )
         );
+        addMetric("nodes", fishnet::util::size(graph.getNodes()));
+        addMetric("edges", fishnet::util::size(graph.getEdges()));
         spdlog::debug("Computing subgraphs for the settlement graph with {} nodes and {} edges", fishnet::util::size(graph.getNodes()), fishnet::util::size(graph.getEdges()));
         auto subgraphs = fishnet::graph::BFS::subgraphs(graph,[](){return fishnet::graph::GraphFactory::UndirectedGraph<SettlementType>();});
         auto p2pDistance = distanceFunctionForSpatialReference(spatialRef);
@@ -139,6 +147,8 @@ public:
                 edges.emplace_back(fishnet::geometry::Segment<double>{lhs,rhs}, EdgeKeys{edge.getFrom().key(), edge.getTo().key()});
             }
         }
+        addMetric("subgraphs", fishnet::util::size(subgraphs));
+        addMetric("mstEdges", edges.size());
         spdlog::debug("Visualizing {} MST edges with a buffer of {} meters", edges.size(), bufferInMeters);
         auto outputLayer = fishnet::VectorIO::empty<EdgeGeometryType>(spatialRef);
         auto fromField = outputLayer.addSizeField(Sympolis::FROM_ID_FIELD).value_or_throw();
@@ -152,7 +162,9 @@ public:
             outputLayer.addFeature(std::move(feature));
         }
         auto outputExtension = std::filesystem::path(geometryFiles.front()).extension().string();
-        fishnet::VectorIO::overwrite(outputLayer, fishnet::AbstractVectorFile(outputStem+"_mst"+outputExtension));
+        auto outputPath = std::filesystem::path(outputStem+"_mst"+outputExtension);
+        addOutput(outputPath);
+        fishnet::VectorIO::overwrite(outputLayer, fishnet::AbstractVectorFile(outputPath));
     }
 };
 

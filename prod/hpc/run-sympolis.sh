@@ -1,10 +1,17 @@
 #!/bin/bash
+# Set to the release tag by the release pipeline, so a released script installs and runs that release
+VERSION="main"
 WORKFLOW_DIR="$HOME/sympolis-workflow"
 REPOSITORY="https://github.com/dfg-sos/sympolis.git"
 SYMPOLIS_IMAGE="ghcr.io/dfg-sos/sympolis"
 FORMAT_ONTOLOGY="https://dfg-sos.github.io/ontologies/eo-formats"
 SLURM_TIME="23:59:59"
 TMPDIR="${TMPDIR:-/tmp}"
+if [ "$VERSION" = "main" ]; then
+    DEFAULT_IMAGE_TAG="latest"
+else
+    DEFAULT_IMAGE_TAG="${VERSION#v}"
+fi
 
 usage() {
     cat <<EOF
@@ -18,8 +25,8 @@ Usage: $(basename "$0") [--profile] [--image-tag <TAG>] [--preset <PRESET_FILE>]
   --profile     Keep the logs of every job in <OUTPUT_DIR>/logs. The stdout log of each job ends
                 with a summary of its parameters, inputs, outputs and runtime
   --image-tag   Tag of the sympolis image run by the workflow steps, e.g. a release or 'edge' for
-                the latest build of main. Defaults to latest
-  --update      Reinstall the workflow and exit
+                the latest build of main. Defaults to $DEFAULT_IMAGE_TAG
+  --update      Reinstall the workflow ($VERSION) and exit
 EOF
 }
 
@@ -36,7 +43,7 @@ require_value() {
 install() {
     local source="$TMPDIR/sympolis"
     rm -rf "$WORKFLOW_DIR" "$source"
-    git clone "$REPOSITORY" "$source" || exit 1
+    git clone --depth 1 --branch "$VERSION" "$REPOSITORY" "$source" || exit 1
     mkdir -p "$WORKFLOW_DIR"
     cp -r "$source/Sympolis.cwl" "$source/cwl" "$source/jobs" "$WORKFLOW_DIR"
     cp -r "$source/data/input" "$WORKFLOW_DIR/input"
@@ -45,14 +52,14 @@ install() {
     source "$WORKFLOW_DIR/venv/bin/activate"
     pip install "toil[cwl]" nodeenv
     nodeenv -p
-    echo "Installation complete"
+    echo "Installation of $VERSION complete"
     usage
 }
 
 parse_args() {
     UPDATE=false
     PROFILE=false
-    IMAGE_TAG="latest"
+    IMAGE_TAG="$DEFAULT_IMAGE_TAG"
     INPUT_FILE=""
     PRESET_FILE=""
     JOB_FILE=""

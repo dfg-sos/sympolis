@@ -173,13 +173,20 @@ private:
 
 public: 
     SettlementVisualization(double initialBufferDistance, double targetBufferDistance)
-        : Task("SettlementVisualization"), initialBufferDistance(initialBufferDistance), targetBufferDistance(targetBufferDistance) {}
+        : Task("SettlementVisualization"), initialBufferDistance(initialBufferDistance), targetBufferDistance(targetBufferDistance) {
+        addParameter("initialBuffer", initialBufferDistance);
+        addParameter("buffer", targetBufferDistance);
+    }
 
-    void operator()(const fishnet::AbstractVectorFile & settlementFile, const fishnet::AbstractVectorFile & mstFile) const {
+    void operator()(const fishnet::AbstractVectorFile & settlementFile, const fishnet::AbstractVectorFile & mstFile) {
+        addInput(settlementFile.getPath());
+        addInput(mstFile.getPath());
         auto idToMSTEdges = mstEdges(mstFile);
         auto inputLayer = fishnet::VectorIO::read<SettlementShape_t>(settlementFile);
+        addMetric("inputFeatures", fishnet::util::size(inputLayer.getFeatures()));
         auto outputLayer = fishnet::VectorIO::emptyCopy<ResultShape_t>(inputLayer);
         auto clusteredSettlements = clusterSettlements(std::move(inputLayer));
+        addMetric("clusters", clusteredSettlements.size() - clusteredSettlements.count(Sympolis::NOISE_CLUSTER_ID));
         auto IDField = outputLayer.getSizeField(Task::FISHNET_ID_FIELD).value_or_throw();
         auto clusterField = outputLayer.getSizeField(Sympolis::CLUSTER_ID_FIELD).value_or_throw();
         auto geometryHasher = std::hash<ResultShape_t>();
@@ -212,6 +219,8 @@ public:
                 );
         }
         auto outputPath = fishnet::util::PathHelper::appendToFilename(settlementFile.getPath(), "_concave_hull").filename();
+        addMetric("outputFeatures", fishnet::util::size(outputLayer.getFeatures()));
+        addOutput(outputPath);
         fishnet::VectorIO::overwrite(outputLayer, fishnet::AbstractVectorFile(outputPath));
     }
 };

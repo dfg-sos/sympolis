@@ -137,19 +137,29 @@ private:
     void writeOutput(const fishnet::util::input_range_of<ClusterWorkloadResult> auto & workloadResults) {
         for (const auto & workload : workloadResults) {
             nlohmann::json outputJson = workload;
-            std::ofstream outputFile(std::filesystem::path(workload.graphBinaryFile).replace_extension(".json"));
+            auto outputPath = std::filesystem::path(workload.graphBinaryFile).replace_extension(".json");
+            addOutput(workload.graphBinaryFile);
+            addOutput(outputPath);
+            std::ofstream outputFile(outputPath);
             outputFile << outputJson.dump(4);
             outputFile.close();
         }
     }
 
 public: 
-    GraphComponents(size_t maxComponentsPerWorkload, std::vector<std::filesystem::path> binGraphFiles):Task("GraphComponents"), maxComponentsPerWorkload(maxComponentsPerWorkload), binGraphFiles(std::move(binGraphFiles)){}
+    GraphComponents(size_t maxComponentsPerWorkload, std::vector<std::filesystem::path> binGraphFiles):Task("GraphComponents"), maxComponentsPerWorkload(maxComponentsPerWorkload), binGraphFiles(std::move(binGraphFiles)){
+        for(const auto & binGraphFile: this->binGraphFiles){
+            addInput(binGraphFile);
+        }
+        addParameter("maxComponentsPerWorkload", this->maxComponentsPerWorkload);
+    }
 
     void run() {
         auto [graph, fileIdToPathMap] = readInput();
         spdlog::debug("Input read completed");
+        addMetric("nodes", fishnet::util::size(graph.getNodes()));
         const auto components = fishnet::graph::BFS::connectedComponents(graph).getAsMap();
+        addMetric("components", components.size());
         spdlog::debug("Connected components calculated");
         fishnet::util::BidirectionalMultiHashMap<FileReference, size_t> fileComponentMultiMap = componentToFilesMap(components);
         auto multiFileComponents = std::views::filter(fileComponentMultiMap.inverseKeySet(), [&fileComponentMultiMap](size_t component) {
@@ -183,6 +193,8 @@ public:
             });
         }
         spdlog::debug("Single-file component workloads created: {}", workloads.size() - multiFileWorkloadsCount);
+        addMetric("multiFileWorkloads", multiFileWorkloadsCount);
+        addMetric("workloads", workloads.size());
         // Transform workloads and export workload results
         writeOutput(std::views::transform(workloads, [&](const auto & workload) {
             return transformToWorkloadResult(workload, fileIdToPathMap, graph, components);

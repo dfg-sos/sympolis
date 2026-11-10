@@ -88,7 +88,18 @@ public:
         std::vector<std::string> && inputFilenames,
         const std::filesystem::path & graphFile,
         std::string && outputStem
-    ):Task("Clustering"), parameters(std::move(parameters)), inputFilenames(std::move(inputFilenames)), graphFile(graphFile), outputStem(std::move(outputStem)){}
+    ):Task("Clustering"), parameters(std::move(parameters)), inputFilenames(std::move(inputFilenames)), graphFile(graphFile), outputStem(std::move(outputStem)){
+        for(const auto & inputFilename: this->inputFilenames){
+            addInput(inputFilename);
+        }
+        addInput(this->graphFile);
+        addParameter("mode", magic_enum::enum_name(this->parameters.mode));
+        addParameter("distanceThreshold", this->parameters.distanceThreshold);
+        if(this->parameters.minClusterSize) addParameter("minClusterSize", *this->parameters.minClusterSize);
+        if(this->parameters.beta) addParameter("beta", *this->parameters.beta);
+        if(this->parameters.t1) addParameter("t1", *this->parameters.t1);
+        addParameter("attributeMapper", magic_enum::enum_name(this->parameters.attributeFunction));
+    }
     
     void run() {
         // Load shapes and settlement graph
@@ -108,10 +119,14 @@ public:
             SettlementShapeDeserializer<ShapeType>{std::move(settlements)}
         );
         auto graph = fishnet::graph::GraphFactory::UndirectedGraph(std::move(adj));
+        addMetric("nodes", fishnet::util::size(graph.getNodes()));
+        addMetric("edges", fishnet::util::size(graph.getEdges()));
 
         // Run clustering
         auto clusterAlgorithm = parameters.getSpatialClusterAlgorithm<decltype(graph)>(distanceFunctionForSpatialReference(spatialRef));
         auto result = clusterAlgorithm(graph);
+        addMetric("clusters", fishnet::util::size(result.clusters));
+        addMetric("noise", fishnet::util::size(result.noise));
 
         // Store result
         auto outputLayer = fishnet::VectorIO::empty<ShapeType>(spatialRef);
@@ -134,6 +149,7 @@ public:
         }
         auto extension = (*std::ranges::begin(vectorFiles)).getPath().extension().string();
         auto outputPath = fishnet::util::PathHelper::absoluteCanonical(this->outputStem + extension);
+        addOutput(outputPath);
         fishnet::VectorIO::overwrite(outputLayer, fishnet::AbstractVectorFile(outputPath));
     }
 };

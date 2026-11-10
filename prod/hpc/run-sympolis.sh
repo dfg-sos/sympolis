@@ -1,7 +1,7 @@
 #!/bin/bash
 # Set to the release tag by the release pipeline, so a released script installs and runs that release
 VERSION="main"
-WORKFLOW_DIR="$HOME/sympolis-workflow"
+WORKFLOW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY="https://github.com/dfg-sos/sympolis.git"
 SYMPOLIS_IMAGE="ghcr.io/dfg-sos/sympolis"
 FORMAT_ONTOLOGY="https://dfg-sos.github.io/ontologies/eo-formats"
@@ -40,19 +40,24 @@ require_value() {
     [ -n "$2" ] || die "$1 requires a value"
 }
 
+# Installs into the directory of this script. The workflow and the venv are replaced, the shipped
+# presets and inputs are copied over the existing ones, keeping files added by the user and outputs.
 install() {
     local source="$TMPDIR/sympolis"
-    rm -rf "$WORKFLOW_DIR" "$source"
-    git clone --depth 1 --branch "$VERSION" "$REPOSITORY" "$source" || exit 1
-    mkdir -p "$WORKFLOW_DIR"
-    cp -r "$source/Sympolis.cwl" "$source/cwl" "$source/jobs" "$WORKFLOW_DIR"
-    cp -r "$source/data/input" "$WORKFLOW_DIR/input"
+    rm -rf "$source"
+    git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$VERSION" "$REPOSITORY" "$source" || exit 1
+    rm -rf "$WORKFLOW_DIR/Sympolis.cwl" "$WORKFLOW_DIR/cwl" "$WORKFLOW_DIR/venv"
+    mkdir -p "$WORKFLOW_DIR/jobs" "$WORKFLOW_DIR/input"
+    cp -r "$source/Sympolis.cwl" "$source/cwl" "$WORKFLOW_DIR"
+    cp -r "$source/jobs/." "$WORKFLOW_DIR/jobs"
+    cp -r "$source/data/input/." "$WORKFLOW_DIR/input"
+    rm -rf "$source"
     module load python
     python -m venv "$WORKFLOW_DIR/venv"
     source "$WORKFLOW_DIR/venv/bin/activate"
-    pip install "toil[cwl]" nodeenv
+    pip install --quiet --disable-pip-version-check "toil[cwl]" nodeenv
     nodeenv -p
-    echo "Installation of $VERSION complete"
+    echo "Installation of $VERSION into $WORKFLOW_DIR complete"
     usage
 }
 
@@ -152,7 +157,7 @@ run_workflow() {
 }
 
 parse_args "$@"
-if $UPDATE || [ ! -d "$WORKFLOW_DIR" ]; then
+if $UPDATE || [ ! -d "$WORKFLOW_DIR/venv" ]; then
     install
     exit 0
 fi

@@ -164,22 +164,24 @@ chmod +x run-sympolis.sh
 A released script installs the workflow of its release and runs the image of the same version.
 The script in this repository installs the `main` branch and runs the `latest` image instead.
 
-Its first call installs the workflow and Toil into `~/sympolis-workflow`, `--update` reinstalls them.
-To upgrade to a newer release, download its script and run it with `--update`.
+Its first call installs the workflow and Toil into the directory of the script, so place it in a
+directory of its own. `--update` reinstalls them, keeping the outputs and files you added to `jobs`
+and `input`. To upgrade to a newer release, download its script into the same directory and run it
+with `--update`.
 ```
 ./run-sympolis.sh --update
 ```
 A run takes the input file and a preset holding everything else, the partition depth included.
 Without `--preset`, [_default.yml_](jobs/default.yml) is used.
 ```
-./run-sympolis.sh --preset ~/sympolis-workflow/jobs/dbsc200_sweep.yml <File.gpkg>
+./run-sympolis.sh --preset jobs/dbsc200_sweep.yml <File.gpkg>
 ```
 Alternatively, pass a complete job file with `--job`, which is run as is, its input included. Its
 relative paths are resolved against the location of the job file.
 ```
 ./run-sympolis.sh --job <Job.yml>
 ```
-The outputs are written to `~/sympolis-workflow/output/<Experiment>`, named after the input file
+The outputs are written to `output/<Experiment>` next to the script, named after the input file
 and the preset (`<File>_<Preset>`), or after the job file when using `--job`. The script exits with
 the exit status of `toil-cwl-runner`. To run the workflow without the script, see its
 `run_workflow` function for the options passed to `toil-cwl-runner`.

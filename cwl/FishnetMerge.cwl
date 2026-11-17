@@ -7,7 +7,7 @@ $schemas:
 baseCommand: [FishnetVectorFileMerger]
 hints:
   DockerRequirement:
-    dockerPull: ghcr.io/descartesresearch/fishnet-apps:2.1.0
+    dockerPull: ghcr.io/descartesresearch/fishnet-apps:2.2.0
 requirements:
   InlineJavascriptRequirement: {}
   ResourceRequirement:

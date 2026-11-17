@@ -137,9 +137,10 @@ public:
             size_t to;
         };
         spdlog::debug("Computing MST for subgraphs");
+        addMetric("subgraphs", fishnet::util::size(subgraphs));
         std::vector<std::pair<fishnet::geometry::Segment<double>, EdgeKeys>> edges;
-        for(const auto & subgraph: subgraphs){
-            auto mst = fishnet::graph::MST::kruskal(subgraph,edgeDistance).value_or_throw("Failed to compute MST for subgraph");
+        for(auto && subgraph: subgraphs){
+            auto mst = fishnet::graph::MST::kruskal(std::move(subgraph),edgeDistance).value_or_throw("Failed to compute MST for subgraph");
             for(const auto & edge: mst.getEdges()){
                 auto [lhs, rhs] = fishnet::geometry::closestPoints(edge.getFrom(),edge.getTo());
                 if(lhs == rhs)
@@ -147,7 +148,6 @@ public:
                 edges.emplace_back(fishnet::geometry::Segment<double>{lhs,rhs}, EdgeKeys{edge.getFrom().key(), edge.getTo().key()});
             }
         }
-        addMetric("subgraphs", fishnet::util::size(subgraphs));
         addMetric("mstEdges", edges.size());
         spdlog::debug("Visualizing {} MST edges with a buffer of {} meters", edges.size(), bufferInMeters);
         auto outputLayer = fishnet::VectorIO::empty<EdgeGeometryType>(spatialRef);

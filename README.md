@@ -221,14 +221,31 @@ cwltool Sympolis.cwl jobs/default.yml
 ```
 The image is published by the CI pipeline.
 
+### End-to-end test
+[test/e2e.sh](test/e2e.sh) runs locally the same end-to-end test as the CI pipeline. It requires
+Docker and `cwltool`:
+```shell
+test/e2e.sh
+```
+It builds the image as `ghcr.io/dfg-sos/sympolis:e2e`, runs every binary with `--help`, validates
+[Sympolis.cwl](Sympolis.cwl), and runs it with [jobs/default.yml](jobs/default.yml). It then checks
+that both output GeoPackages contain features. The workflow steps are pointed to the `:e2e` image
+by a cwltool override, so a pulled `:latest` image is left untouched. The outputs are written to
+`tmp/e2e`, which is emptied first.
+
+| Option | Description |
+|---|---|
+| `--image <Image>` | Tests an existing image instead of building one, e.g. `ghcr.io/dfg-sos/sympolis:edge` |
+| `--outdir <Dir>` | Writes the outputs to `<Dir>` instead of `tmp/e2e`. The directory is emptied first |
+
 ### CI/CD
 The [CI workflow](.github/workflows/ci.yml) runs on release tags `v*`, on manual dispatch and on pushes and pull requests to `main` that touch
 the binaries, the image or the workflow tested by it (`src`, `lib`, `CMakeLists.txt`, `Dockerfile`,
-`.dockerignore`, `Sympolis.cwl`, `cwl`, `jobs/default.yml` and the pipeline itself). Changes to
+`.dockerignore`, `Sympolis.cwl`, `cwl`, `jobs/default.yml`, `test` and the pipeline itself). Changes to
 the documentation, the other job files or the HPC scripts do not trigger it.
 It consists of three jobs, each with only the permissions it needs. The release tag is the only
 place holding the version, so releasing means pushing a tag `v<major>.<minor>.<patch>`.
-1. `test` builds the binaries from the [Dockerfile](Dockerfile), runs every binary with `--help` as a smoke test, and validates [Sympolis.cwl](Sympolis.cwl) and executes it with [jobs/default.yml](jobs/default.yml) using `cwltool` against the freshly built image. The outputs are uploaded as the `sympolis-output` artifact.
+1. `test` builds the binaries from the [Dockerfile](Dockerfile) and runs the [end-to-end test](#end-to-end-test) against the freshly built image. The outputs are uploaded as the `sympolis-output` artifact.
 2. `publish` pushes the tested image to the GitHub Container Registry:
    - release tags `v<major>.<minor>.<patch>` publish the stable `:<version>` and `:latest` tags
    - pushes to `main` publish the development tag `:edge`

@@ -16,6 +16,7 @@ on:
       - "Sympolis.cwl"
       - "cwl/**"
       - "jobs/default.yml"
+      - "test/**"
       - ".github/workflows/ci.yml"
   pull_request:
     branches: [main]
@@ -89,15 +90,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test binaries
-        run: |
-          for bin in SympolisGraphConstruction SympolisGraphComponents SympolisSpatialClustering \
-                     SympolisPolygonOutline SympolisEdgeVisualization SympolisMSTVisualization; do
-            echo "::group::$bin"
-            docker run --rm "$IMAGE:latest" "$bin" --help
-            echo "::endgroup::"
-          done
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -105,18 +97,10 @@ jobs:
       - name: Install cwltool
         run: pip install "cwltool==$CWLTOOL_VERSION"
 
-      - name: Validate workflow
-        run: cwltool --validate Sympolis.cwl
-
-      - name: Run example workflow (jobs/default.yml)
-        run: cwltool --outdir ci-output Sympolis.cwl jobs/default.yml
-
-      - name: Check outputs
-        run: |
-          for f in ci-output/Kahama_Small_Sympolis.gpkg ci-output/Kahama_Small_Sympolis_MultiPolygons.gpkg; do
-            test -s "$f" || { echo "::error::Missing or empty output $f"; exit 1; }
-          done
-          ls -lh ci-output
+      # Same end-to-end test as run locally, against the image built above: smoke tests the binaries,
+      # validates the workflow, runs it with jobs/default.yml and checks the outputs.
+      - name: End-to-end test
+        run: test/e2e.sh --image "$IMAGE:latest" --outdir ci-output
 
       - name: Upload workflow outputs
         if: always()

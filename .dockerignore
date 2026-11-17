@@ -16,3 +16,4 @@ LICENSE
 install.sh
 update.sh
 prod/
+test/

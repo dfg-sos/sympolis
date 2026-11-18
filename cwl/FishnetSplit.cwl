@@ -9,7 +9,7 @@ baseCommand: [FishnetVectorFileSplitter]
 
 hints:
   DockerRequirement:
-    dockerPull: ghcr.io/descartesresearch/fishnet-apps:2.2.1
+    dockerPull: ghcr.io/descartesresearch/fishnet-apps:2.3.0
 
 requirements:
   InlineJavascriptRequirement: {}
